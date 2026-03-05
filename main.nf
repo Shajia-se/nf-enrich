@@ -9,7 +9,7 @@ process functional_enrich {
   publishDir "${params.project_folder}/${params.enrich_output}", mode: 'copy', overwrite: true
 
   input:
-    path(manifest_tsv)
+    tuple path(manifest_tsv), path(input_files)
 
   output:
     path("functional_enrich_results")
@@ -56,18 +56,53 @@ process functional_enrich {
   manifest <- manifest[complete.cases(manifest[, c("source","sample","annotated_tsv","peak_file")]), , drop=FALSE]
   manifest\$source <- trimws(as.character(manifest\$source))
   manifest\$sample <- trimws(as.character(manifest\$sample))
+  manifest\$annotated_tsv <- trimws(as.character(manifest\$annotated_tsv))
+  manifest\$peak_file <- trimws(as.character(manifest\$peak_file))
+
+  # Drop accidental header-like rows carried as data
+  manifest <- manifest[
+    !(manifest\$source == "source" &
+      manifest\$sample == "sample" &
+      manifest\$annotated_tsv == "annotated_tsv" &
+      manifest\$peak_file == "peak_file"),
+    ,
+    drop=FALSE
+  ]
+
+  # Keep only rows whose files can be resolved in work dir (absolute path or staged basename)
+  can_resolve <- function(p) {
+    file.exists(p) || file.exists(basename(p))
+  }
+  keep <- vapply(
+    seq_len(nrow(manifest)),
+    function(i) can_resolve(manifest\$annotated_tsv[i]) && can_resolve(manifest\$peak_file[i]),
+    logical(1)
+  )
+  if (any(!keep)) {
+    message("Dropping ", sum(!keep), " manifest rows with unresolved files")
+  }
+  manifest <- manifest[keep, , drop=FALSE]
   if (nrow(manifest) == 0) {
     stop("Manifest has 0 usable rows after filtering empty entries")
   }
   dir.create("functional_enrich_results", showWarnings=FALSE)
 
+  resolve_input_path <- function(path) {
+    if (file.exists(path)) return(path)
+    b <- basename(path)
+    if (file.exists(b)) return(b)
+    stop("Cannot open file: ", path, " (staged basename not found: ", b, ")")
+  }
+
   read_peak_gr <- function(path) {
+    path <- resolve_input_path(path)
     d <- read.table(path, sep="\\t", header=FALSE, as.is=TRUE, comment.char="", quote="")
     if (ncol(d) < 3) stop("Peak file must have at least 3 columns: ", path)
     GRanges(seqnames=d[[1]], ranges=IRanges(as.integer(d[[2]]) + 1L, as.integer(d[[3]])))
   }
 
   extract_genes <- function(path) {
+    path <- resolve_input_path(path)
     d <- read.delim(path, as.is=TRUE, check.names=FALSE)
     if ("ENTREZID" %in% colnames(d)) {
       vals <- d\$ENTREZID
@@ -292,11 +327,16 @@ workflow {
 
   assert !rows.isEmpty() : "No enrich input rows found. Check chipseeker_output and enrich_peak_sources."
 
+  def allInputFiles = rows
+    .collectMany { r -> [r[2], r[3]] }
+    .unique()
+
   Channel
     .fromList(['source\tsample\tannotated_tsv\tpeak_file'] + rows.collect { r ->
       "${r[0]}\t${r[1]}\t${r[2]}\t${r[3]}"
     })
     .collectFile(name: 'functional_enrich_manifest.tsv', newLine: true)
+    .map { mf -> tuple(mf, allInputFiles) }
     .set { manifest_ch }
 
   functional_enrich(manifest_ch)
