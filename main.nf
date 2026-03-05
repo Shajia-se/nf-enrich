@@ -128,8 +128,8 @@ process functional_enrich {
 
   clean_term_labels <- function(x) {
     x <- as.character(x)
-    x <- gsub("\\\\s*-\\\\s*Mus musculus\\\\s*\\\\(house mouse\\\\)\\\\s*$", "", x, perl=TRUE)
-    x <- gsub("\\\\s*\\\\[Mus musculus\\\\]\\\\s*$", "", x, perl=TRUE)
+    x <- gsub("\\\\s*-\\\\s*Mus musculus\\\\s*\\\\(house mouse\\\\)\\\\s*\\$", "", x, perl=TRUE)
+    x <- gsub("\\\\s*\\\\[Mus musculus\\\\]\\\\s*\\$", "", x, perl=TRUE)
     x
   }
 
