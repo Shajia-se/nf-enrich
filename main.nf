@@ -34,7 +34,26 @@ process functional_enrich {
     library(ggplot2)
   })
 
-  manifest <- read.delim("${manifest_tsv}", as.is=TRUE, check.names=FALSE)
+  manifest <- read.delim("${manifest_tsv}", as.is=TRUE, check.names=FALSE, quote="", comment.char="")
+  # Handle possible UTF-8 BOM and surrounding whitespace in header names
+  colnames(manifest) <- trimws(sub("^\\ufeff", "", colnames(manifest)))
+  required_cols <- c("source", "sample", "annotated_tsv", "peak_file")
+  missing_cols <- setdiff(required_cols, colnames(manifest))
+  if (length(missing_cols) > 0) {
+    stop(
+      "Manifest is missing required column(s): ",
+      paste(missing_cols, collapse=", "),
+      "; found: ",
+      paste(colnames(manifest), collapse=", ")
+    )
+  }
+  manifest <- manifest[, required_cols, drop=FALSE]
+  manifest <- manifest[complete.cases(manifest[, c("source","sample","annotated_tsv","peak_file")]), , drop=FALSE]
+  manifest\$source <- trimws(as.character(manifest\$source))
+  manifest\$sample <- trimws(as.character(manifest\$sample))
+  if (nrow(manifest) == 0) {
+    stop("Manifest has 0 usable rows after filtering empty entries")
+  }
   dir.create("functional_enrich_results", showWarnings=FALSE)
 
   read_peak_gr <- function(path) {
@@ -93,7 +112,7 @@ process functional_enrich {
     )
   }
 
-  by_source <- split(manifest, manifest\$source)
+  by_source <- split(manifest, manifest\$source, drop=TRUE)
 
   for (source in names(by_source)) {
     S <- by_source[[source]]
