@@ -234,13 +234,24 @@ workflow {
   def rows = []
 
   def resolveAnnotated = { source, sample ->
-    def primary = file("${params.chipseeker_output}/${sample}/annotated_peaks.${sample}.tsv")
-    if (primary.exists()) return primary
+    // Try multiple naming conventions because chipseeker outputs evolved over time.
+    def sampleAliases = [sample]
+    if (sample.startsWith('idr__'))       sampleAliases << sample.replaceFirst(/^idr__/, '')
+    if (sample.startsWith('consensus__')) sampleAliases << sample.replaceFirst(/^consensus__/, '')
+    if (sample.startsWith('diffbind__'))  sampleAliases << sample.replaceFirst(/^diffbind__/, '')
+    sampleAliases = sampleAliases.unique()
 
-    if (source == 'idr' && sample.startsWith('idr__')) {
-      def legacy = sample.replaceFirst(/^idr__/, '')
-      def fallback = file("${params.chipseeker_output}/${legacy}/annotated_peaks.${legacy}.tsv")
-      if (fallback.exists()) return fallback
+    for (alias in sampleAliases) {
+      def p = file("${params.chipseeker_output}/${alias}/annotated_peaks.${alias}.tsv")
+      if (p.exists()) return p
+    }
+
+    // Last fallback: legacy layout where directory uses original sample but filename uses trimmed alias
+    for (dirAlias in sampleAliases) {
+      for (fileAlias in sampleAliases) {
+        def p = file("${params.chipseeker_output}/${dirAlias}/annotated_peaks.${fileAlias}.tsv")
+        if (p.exists()) return p
+      }
     }
     return null
   }
