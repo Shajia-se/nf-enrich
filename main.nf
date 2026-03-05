@@ -121,6 +121,32 @@ process functional_enrich {
     openxlsx::write.xlsx(df, paste0(prefix, ".xlsx"), rowNames=FALSE)
   }
 
+  pretty_sample <- function(x) {
+    x <- sub("^(idr__|consensus__|diffbind__)", "", x)
+    x
+  }
+
+  clean_term_labels <- function(x) {
+    x <- as.character(x)
+    x <- gsub("\\\\s*-\\\\s*Mus musculus\\\\s*\\\\(house mouse\\\\)\\\\s*$", "", x, perl=TRUE)
+    x <- gsub("\\\\s*\\\\[Mus musculus\\\\]\\\\s*$", "", x, perl=TRUE)
+    x
+  }
+
+  clean_enrich_object <- function(obj) {
+    if (is.null(obj)) return(obj)
+    if ("enrichResult" %in% class(obj)) {
+      if (!is.null(obj@result) && "Description" %in% colnames(obj@result)) {
+        obj@result[, "Description"] <- clean_term_labels(obj@result[, "Description"])
+      }
+    } else if ("compareClusterResult" %in% class(obj)) {
+      if (!is.null(obj@compareClusterResult) && "Description" %in% colnames(obj@compareClusterResult)) {
+        obj@compareClusterResult[, "Description"] <- clean_term_labels(obj@compareClusterResult[, "Description"])
+      }
+    }
+    obj
+  }
+
   safe_plot <- function(expr, file, width=8, height=5) {
     pdf(file, width=width, height=height)
     ok <- TRUE
@@ -171,22 +197,47 @@ process functional_enrich {
       dir.create(sample_dir, showWarnings=FALSE, recursive=TRUE)
 
       genes <- genes_by_sample[[sample]]
-      if (length(genes) == 0) next
+      if (length(genes) == 0) {
+        writeLines("No input genes extracted from annotation table", file.path(sample_dir, "NO_ENRICHMENT.txt"))
+        next
+      }
+
+      sample_stat <- data.frame(
+        sample = sample,
+        pretty_sample = pretty_sample(sample),
+        n_input_genes = length(genes),
+        GO_BP_terms = 0L,
+        GO_MF_terms = 0L,
+        GO_CC_terms = 0L,
+        KEGG_terms = 0L,
+        stringsAsFactors = FALSE
+      )
 
       for (ont in c("BP","MF","CC")) {
         ego <- tryCatch(run_go(genes, universe, ont), error=function(e) NULL)
+        ego <- clean_enrich_object(ego)
         if (!is.null(ego) && nrow(as.data.frame(ego)) > 0) {
           df <- as.data.frame(ego)
+          if ("Description" %in% colnames(df)) df[, "Description"] <- clean_term_labels(df[, "Description"])
           write_table_xlsx(df, file.path(sample_dir, paste0("GO_", ont)))
           safe_plot(print(dotplot(ego, showCategory=${params.show_category}) + ggtitle(paste(sample, source, ont))), file.path(sample_dir, paste0("GO_", ont, ".pdf")), 9, 5)
+          sample_stat[[paste0("GO_", ont, "_terms")]] <- nrow(df)
         }
       }
 
       ekegg <- tryCatch(run_kegg(genes, universe), error=function(e) NULL)
+      ekegg <- clean_enrich_object(ekegg)
       if (!is.null(ekegg) && nrow(as.data.frame(ekegg)) > 0) {
         df <- as.data.frame(ekegg)
+        if ("Description" %in% colnames(df)) df[, "Description"] <- clean_term_labels(df[, "Description"])
         write_table_xlsx(df, file.path(sample_dir, "KEGG"))
         safe_plot(print(dotplot(ekegg, showCategory=${params.show_category}) + ggtitle(paste(sample, source, "KEGG"))), file.path(sample_dir, "KEGG.pdf"), 9, 5)
+        sample_stat\$KEGG_terms <- nrow(df)
+      }
+
+      write.table(sample_stat, file.path(sample_dir, "enrichment_status.tsv"), sep="\t", quote=FALSE, row.names=FALSE)
+      if (sum(sample_stat[1, c("GO_BP_terms","GO_MF_terms","GO_CC_terms","KEGG_terms")]) == 0) {
+        writeLines("No significant enrichment terms under current cutoff", file.path(sample_dir, "NO_ENRICHMENT.txt"))
       }
     }
 
@@ -194,21 +245,27 @@ process functional_enrich {
       comp_dir <- file.path(source_dir, "compareCluster")
       dir.create(comp_dir, showWarnings=FALSE, recursive=TRUE)
 
-      comp_bp <- tryCatch(compareCluster(
-        geneCluster = genes_by_sample,
-        fun = "enrichGO",
-        universe = universe,
-        OrgDb = org.Mm.eg.db,
-        keyType = "ENTREZID",
-        ont = "BP",
-        pAdjustMethod = "BH",
-        pvalueCutoff = ${params.pvalue_cutoff}
-      ), error=function(e) NULL)
+      has_comp_go <- FALSE
+      for (ont in c("BP","MF","CC")) {
+        comp_go <- tryCatch(compareCluster(
+          geneCluster = genes_by_sample,
+          fun = "enrichGO",
+          universe = universe,
+          OrgDb = org.Mm.eg.db,
+          keyType = "ENTREZID",
+          ont = ont,
+          pAdjustMethod = "BH",
+          pvalueCutoff = ${params.pvalue_cutoff}
+        ), error=function(e) NULL)
+        comp_go <- clean_enrich_object(comp_go)
 
-      if (!is.null(comp_bp) && nrow(as.data.frame(comp_bp)) > 0) {
-        df <- as.data.frame(comp_bp)
-        write_table_xlsx(df, file.path(comp_dir, "compareCluster_GO_BP"))
-        safe_plot(print(dotplot(comp_bp, showCategory=${params.show_category}) + ggtitle(paste(source, "GO BP compareCluster"))), file.path(comp_dir, "compareCluster_GO_BP.pdf"), 10, 6)
+        if (!is.null(comp_go) && nrow(as.data.frame(comp_go)) > 0) {
+          has_comp_go <- TRUE
+          df <- as.data.frame(comp_go)
+          if ("Description" %in% colnames(df)) df[, "Description"] <- clean_term_labels(df[, "Description"])
+          write_table_xlsx(df, file.path(comp_dir, paste0("compareCluster_GO_", ont)))
+          safe_plot(print(dotplot(comp_go, showCategory=${params.show_category}) + ggtitle(paste(source, "GO", ont, "compareCluster"))), file.path(comp_dir, paste0("compareCluster_GO_", ont, ".pdf")), 10, 6)
+        }
       }
 
       comp_kegg <- tryCatch(compareCluster(
@@ -218,11 +275,18 @@ process functional_enrich {
         pAdjustMethod = "BH",
         pvalueCutoff = ${params.pvalue_cutoff}
       ), error=function(e) NULL)
+      comp_kegg <- clean_enrich_object(comp_kegg)
 
       if (!is.null(comp_kegg) && nrow(as.data.frame(comp_kegg)) > 0) {
         df <- as.data.frame(comp_kegg)
+        if ("Description" %in% colnames(df)) df[, "Description"] <- clean_term_labels(df[, "Description"])
         write_table_xlsx(df, file.path(comp_dir, "compareCluster_KEGG"))
         safe_plot(print(dotplot(comp_kegg, showCategory=${params.show_category}) + ggtitle(paste(source, "KEGG compareCluster"))), file.path(comp_dir, "compareCluster_KEGG.pdf"), 10, 6)
+      }
+
+      if (!has_comp_go &&
+          (is.null(comp_kegg) || nrow(as.data.frame(comp_kegg)) == 0)) {
+        writeLines("No significant compareCluster enrichment under current cutoff", file.path(comp_dir, "NO_ENRICHMENT.txt"))
       }
     }
 
@@ -232,21 +296,59 @@ process functional_enrich {
 
       gr1 <- read_peak_gr(S\$peak_file[1])
       gr2 <- read_peak_gr(S\$peak_file[2])
+      label1 <- pretty_sample(S\$sample[1])
+      label2 <- pretty_sample(S\$sample[2])
       overlap <- tryCatch(findOverlapsOfPeaks(gr1, gr2, maxgap=${params.venn_maxgap}), error=function(e) NULL)
       if (!is.null(overlap)) {
+        ov <- findOverlaps(gr1, gr2, maxgap=${params.venn_maxgap})
+        n1 <- length(gr1)
+        n2 <- length(gr2)
+        n12 <- length(unique(S4Vectors::queryHits(ov)))
+        n12 <- min(n12, n1, n2)
+        venn_counts <- data.frame(
+          source = source,
+          sample_1 = label1,
+          sample_2 = label2,
+          n_sample_1 = n1,
+          n_sample_2 = n2,
+          n_overlap = n12,
+          n_unique_1 = n1 - n12,
+          n_unique_2 = n2 - n12,
+          stringsAsFactors = FALSE
+        )
+        write.table(venn_counts, file.path(venn_dir, paste0(source, "_venn_counts.tsv")), sep="\t", quote=FALSE, row.names=FALSE)
+
         pdf(file.path(venn_dir, paste0(source, "_venn.pdf")), width=8, height=6)
         tryCatch({
-          makeVennDiagram(
-            overlap,
-            fill = c("${params.venn_color_1}", "${params.venn_color_2}"),
-            col = "black",
-            cat.col = "black",
-            cat.cex = 1.1,
-            cex = 1.2,
-            lwd = 2,
-            alpha = 0.7,
-            main = paste("Overlap -", source)
-          )
+          if (requireNamespace("VennDiagram", quietly=TRUE)) {
+            grid::grid.newpage()
+            VennDiagram::draw.pairwise.venn(
+              area1 = n1,
+              area2 = n2,
+              cross.area = n12,
+              category = c(label1, label2),
+              fill = c("${params.venn_color_1}", "${params.venn_color_2}"),
+              alpha = c(0.6, 0.6),
+              lwd = 2,
+              cex = 1.2,
+              cat.cex = 1.1,
+              cat.col = c("black", "black"),
+              scaled = TRUE
+            )
+          } else {
+            makeVennDiagram(
+              overlap,
+              NameOfPeaks = c(label1, label2),
+              fill = c("${params.venn_color_1}", "${params.venn_color_2}"),
+              col = "black",
+              cat.col = "black",
+              cat.cex = 1.1,
+              cex = 1.2,
+              lwd = 2,
+              alpha = 0.7,
+              main = paste("Overlap -", source)
+            )
+          }
         }, error=function(e) { plot.new(); title(conditionMessage(e)) })
         dev.off()
       }
