@@ -39,6 +39,11 @@ process functional_enrich {
   colnames(manifest) <- trimws(sub("^\\ufeff", "", colnames(manifest)))
   required_cols <- c("source", "sample", "annotated_tsv", "peak_file")
   missing_cols <- setdiff(required_cols, colnames(manifest))
+  # Backward compatibility: some older manifest files were produced without header
+  if (length(missing_cols) > 0 && ncol(manifest) == 4) {
+    colnames(manifest) <- required_cols
+    missing_cols <- setdiff(required_cols, colnames(manifest))
+  }
   if (length(missing_cols) > 0) {
     stop(
       "Manifest is missing required column(s): ",
