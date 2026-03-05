@@ -46,9 +46,9 @@ process functional_enrich {
   extract_genes <- function(path) {
     d <- read.delim(path, as.is=TRUE, check.names=FALSE)
     if ("ENTREZID" %in% colnames(d)) {
-      vals <- d$ENTREZID
+      vals <- d\$ENTREZID
     } else if ("geneId" %in% colnames(d)) {
-      vals <- d$geneId
+      vals <- d\$geneId
     } else {
       vals <- character()
     }
@@ -93,21 +93,21 @@ process functional_enrich {
     )
   }
 
-  by_source <- split(manifest, manifest$source)
+  by_source <- split(manifest, manifest\$source)
 
   for (source in names(by_source)) {
     S <- by_source[[source]]
     source_dir <- file.path("functional_enrich_results", source)
     dir.create(source_dir, showWarnings=FALSE, recursive=TRUE)
 
-    genes_by_sample <- lapply(S$annotated_tsv, extract_genes)
-    names(genes_by_sample) <- S$sample
+    genes_by_sample <- lapply(S\$annotated_tsv, extract_genes)
+    names(genes_by_sample) <- S\$sample
     universe <- sort(unique(unlist(genes_by_sample)))
 
     if (length(universe) == 0) next
 
     for (i in seq_len(nrow(S))) {
-      sample <- S$sample[i]
+      sample <- S\$sample[i]
       sample_dir <- file.path(source_dir, sample)
       dir.create(sample_dir, showWarnings=FALSE, recursive=TRUE)
 
@@ -171,8 +171,8 @@ process functional_enrich {
       venn_dir <- file.path(source_dir, "overlap")
       dir.create(venn_dir, showWarnings=FALSE, recursive=TRUE)
 
-      gr1 <- read_peak_gr(S$peak_file[1])
-      gr2 <- read_peak_gr(S$peak_file[2])
+      gr1 <- read_peak_gr(S\$peak_file[1])
+      gr2 <- read_peak_gr(S\$peak_file[2])
       overlap <- tryCatch(findOverlapsOfPeaks(gr1, gr2, maxgap=${params.venn_maxgap}), error=function(e) NULL)
       if (!is.null(overlap)) {
         pdf(file.path(venn_dir, paste0(source, "_venn.pdf")), width=8, height=6)
