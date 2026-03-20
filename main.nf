@@ -86,6 +86,7 @@ process functional_enrich {
     stop("Manifest has 0 usable rows after filtering empty entries")
   }
   dir.create("functional_enrich_results", showWarnings=FALSE)
+  write.table(manifest, "functional_enrich_results/manifest_used.tsv", sep="\t", quote=FALSE, row.names=FALSE)
 
   resolve_input_path <- function(path) {
     if (file.exists(path)) return(path)
@@ -184,6 +185,7 @@ process functional_enrich {
     S <- by_source[[source]]
     source_dir <- file.path("functional_enrich_results", source)
     dir.create(source_dir, showWarnings=FALSE, recursive=TRUE)
+    write.table(S, file.path(source_dir, "source_manifest.tsv"), sep="\t", quote=FALSE, row.names=FALSE)
 
     genes_by_sample <- lapply(S\$annotated_tsv, extract_genes)
     names(genes_by_sample) <- S\$sample
@@ -352,6 +354,13 @@ process functional_enrich {
         }, error=function(e) { plot.new(); title(conditionMessage(e)) })
         dev.off()
       }
+    } else {
+      venn_dir <- file.path(source_dir, "overlap")
+      dir.create(venn_dir, showWarnings=FALSE, recursive=TRUE)
+      writeLines(
+        paste0("Overlap skipped: source=", source, " has ", nrow(S), " sample(s), requires exactly 2."),
+        file.path(venn_dir, "OVERLAP_SKIPPED.txt")
+      )
     }
   }
   RS
